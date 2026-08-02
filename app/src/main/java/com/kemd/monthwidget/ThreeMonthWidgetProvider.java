@@ -4,8 +4,15 @@ import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProvider;
 import android.content.ContentUris;
 import android.content.Context;
+import android.content.res.Resources;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.net.Uri;
+import android.os.Bundle;
 import android.provider.CalendarContract;
 import android.widget.RemoteViews;
 
@@ -20,66 +27,117 @@ import java.util.Set;
 
 public class ThreeMonthWidgetProvider extends AppWidgetProvider {
 
-    private static final int[] COLUMN_IDS = {
-            R.id.month_column_0, R.id.month_column_1, R.id.month_column_2
-    };
     private static final String[] DAY_LABELS = {"S", "M", "T", "W", "T", "F", "S"};
 
     @Override
     public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
         for (int appWidgetId : appWidgetIds) {
-            RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_three_month);
-
-            YearMonth current = YearMonth.now();
-            for (int i = 0; i < 3; i++) {
-                buildMonthColumn(context, views, COLUMN_IDS[i], current.plusMonths(i));
-            }
-
-            appWidgetManager.updateAppWidget(appWidgetId, views);
+            updateWidget(context, appWidgetManager, appWidgetId);
         }
     }
 
-    private void buildMonthColumn(Context context, RemoteViews rootViews, int columnId, YearMonth month) {
-        rootViews.removeAllViews(columnId);
+    @Override
+    public void onAppWidgetOptionsChanged(Context context, AppWidgetManager appWidgetManager,
+                                           int appWidgetId, Bundle newOptions) {
+        updateWidget(context, appWidgetManager, appWidgetId);
+    }
 
-        RemoteViews title = new RemoteViews(context.getPackageName(), R.layout.widget_month_title);
-        String label = month.getMonth().getDisplayName(TextStyle.SHORT, Locale.getDefault())
-                + " " + month.getYear();
-        title.setTextViewText(R.id.month_title_text, label);
-        rootViews.addView(columnId, title);
+    private void updateWidget(Context context, AppWidgetManager appWidgetManager, int appWidgetId) {
+        Bundle options = appWidgetManager.getAppWidgetOptions(appWidgetId);
+        int widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 320);
+        int heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 250);
+        if (widthDp <= 0) widthDp = 320;
+        if (heightDp <= 0) heightDp = 250;
 
-        RemoteViews headerRow = new RemoteViews(context.getPackageName(), R.layout.widget_day_row);
-        for (String d : DAY_LABELS) {
-            RemoteViews cell = new RemoteViews(context.getPackageName(), R.layout.widget_day_cell);
-            cell.setTextViewText(R.id.day_cell_text, d);
-            headerRow.addView(R.id.day_row_container, cell);
-        }
-        rootViews.addView(columnId, headerRow);
+        float density = Resources.getSystem().getDisplayMetrics().density;
+        int widthPx = Math.round(widthDp * density);
+        int heightPx = Math.round(heightDp * density);
 
-        Set<Integer> daysWithEvents = getDaysWithEvents(context, month);
+        Bitmap bitmap = drawCalendarBitmap(context, widthPx, heightPx);
 
-        LocalDate firstOfMonth = month.atDay(1);
-        int startOffset = firstOfMonth.getDayOfWeek().getValue() % 7;
-        int totalDays = month.lengthOfMonth();
+        RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_three_month);
+        views.setImageViewBitmap(R.id.widget_image, bitmap);
+        appWidgetManager.updateAppWidget(appWidgetId, views);
+    }
 
-        int dayCounter = 1;
-        while (dayCounter <= totalDays) {
-            RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.widget_day_row);
-            for (int col = 0; col < 7; col++) {
-                RemoteViews cell = new RemoteViews(context.getPackageName(), R.layout.widget_day_cell);
-                boolean isBlank = (dayCounter == 1 && col < startOffset) || dayCounter > totalDays;
-                if (isBlank) {
-                    cell.setTextViewText(R.id.day_cell_text, "");
-                } else {
-                    cell.setTextViewText(R.id.day_cell_text, String.valueOf(dayCounter));
-                    if (daysWithEvents.contains(dayCounter)) {
-                        cell.setInt(R.id.day_cell_text, "setBackgroundColor", 0xFF3A6EA5);
-                    }
-                    dayCounter++;
-                }
+    private Bitmap drawCalendarBitmap(Context context, int widthPx, int heightPx) {
+        Bitmap bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        canvas.drawColor(Color.parseColor("#1A1A1A"));
+
+        float density = Resources.getSystem().getDisplayMetrics().density;
+        float titleSize = 12 * density;
+        float headerSize = 9 * density;
+        float daySize = 10 * density;
+
+        Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        titlePaint.setColor(Color.WHITE);
+        titlePaint.setTextSize(titleSize);
+        titlePaint.setFakeBoldText(true);
+        titlePaint.setTextAlign(Paint.Align.CENTER);
+
+        Paint headerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        headerPaint.setColor(Color.parseColor("#AAAAAA"));
+        headerPaint.setTextSize(headerSize);
+        headerPaint.setTextAlign(Paint.Align.CENTER);
+
+        Paint dayPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dayPaint.setColor(Color.parseColor("#DDDDDD"));
+        dayPaint.setTextSize(daySize);
+        dayPaint.setTextAlign(Paint.Align.CENTER);
+
+        Paint highlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        highlightPaint.setColor(Color.parseColor("#3A6EA5"));
+
+        int columnWidth = widthPx / 3;
+        YearMonth current = YearMonth.now();
+
+        for (int i = 0; i < 3; i++) {
+            YearMonth month = current.plusMonths(i);
+            float colLeft = i * columnWidth;
+            float colCenter = colLeft + columnWidth / 2f;
+            float cellWidth = columnWidth / 7f;
+
+            float y = titleSize + (6 * density);
+            String label = month.getMonth().getDisplayName(TextStyle.SHORT, Locale.getDefault())
+                    + " " + month.getYear();
+            canvas.drawText(label, colCenter, y, titlePaint);
+
+            y += headerSize + (10 * density);
+            for (int d = 0; d < 7; d++) {
+                float x = colLeft + cellWidth * d + cellWidth / 2f;
+                canvas.drawText(DAY_LABELS[d], x, y, headerPaint);
             }
-            rootViews.addView(columnId, row);
+
+            Set<Integer> daysWithEvents = getDaysWithEvents(context, month);
+
+            LocalDate firstOfMonth = month.atDay(1);
+            int startOffset = firstOfMonth.getDayOfWeek().getValue() % 7;
+            int totalDays = month.lengthOfMonth();
+
+            float rowHeight = daySize + (8 * density);
+            int dayCounter = 1;
+            int row = 0;
+            while (dayCounter <= totalDays) {
+                float rowY = y + headerSize + (6 * density) + (row * rowHeight);
+                for (int col = 0; col < 7; col++) {
+                    boolean isBlank = (dayCounter == 1 && col < startOffset) || dayCounter > totalDays;
+                    if (!isBlank) {
+                        float cx = colLeft + cellWidth * col + cellWidth / 2f;
+                        if (daysWithEvents.contains(dayCounter)) {
+                            RectF r = new RectF(cx - cellWidth / 2f + 2, rowY - daySize,
+                                    cx + cellWidth / 2f - 2, rowY + (4 * density));
+                            canvas.drawRoundRect(r, 4 * density, 4 * density, highlightPaint);
+                        }
+                        canvas.drawText(String.valueOf(dayCounter), cx, rowY, dayPaint);
+                        dayCounter++;
+                    }
+                }
+                row++;
+            }
         }
+
+        return bitmap;
     }
 
     private Set<Integer> getDaysWithEvents(Context context, YearMonth month) {
@@ -110,7 +168,7 @@ public class ThreeMonthWidgetProvider extends AppWidgetProvider {
                 cursor.close();
             }
         } catch (SecurityException e) {
-            // Permission not granted yet — widget just shows plain calendars
+            // permission not granted yet
         }
         return days;
     }
